@@ -1,0 +1,17 @@
+[project]
+name = "job-tracker-api"
+version = "0.1.0"
+description = "API for tracking job applications"
+requires-python = ">=3.11"
+dependencies = [
+    "Django>=5.2,<6.0",
+]
+
+[dependency-groups]
+dev = [
+    "django-stubs>=5.2,<6.0",
+    "django-cors-headers",
+]
+
+[tool.django-stubs]
+django_settings_module = "config.settings"

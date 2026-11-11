@@ -1,3 +1,4 @@
+from typing import Any
 from django.http import JsonResponse
 from django.contrib.auth import authenticate, login 
 from .models import User, JobPost, Application
@@ -8,23 +9,6 @@ Allowed_Roles = [User.Role.CANDIDATE, User.Role.RECRUITER]
 
 def health_check(request) -> JsonResponse:
     return JsonResponse({"status": "ok"})
-
-def loginUser(request) -> JsonResponse:
-    try:
-        data = json.loads(request.body)
-        email = data.get("email")
-        password = data.get("password")
-        if not email or not password:
-            return JsonResponse({"error:": "Missing required fields"}, status=400)
-        user = authenticate(request, email=email, password=password)
-        # print("user is", user.id, user.email, user.role)
-        
-        if user is None:
-            return JsonResponse({"error:": "Invalid credentials"}, status=400)
-        login(request, user)
-        return JsonResponse({"id":user.id,"message":"User logged in successfully"}, status=200)
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
 
 def signup(request) -> JsonResponse:
     try:
@@ -47,6 +31,23 @@ def signup(request) -> JsonResponse:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     except KeyError:
         return JsonResponse({"error": "Missing required fields"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+def loginUser(request) -> JsonResponse:
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+        password = data.get("password")
+        if not email or not password:
+            return JsonResponse({"error:": "Missing required fields"}, status=400)
+        user = authenticate(request, email=email, password=password)
+        # print("user is", user.id, user.email, user.role)
+        
+        if user is None:
+            return JsonResponse({"error:": "Invalid credentials"}, status=400)
+        login(request, user)
+        return JsonResponse({"id":user.id, "role":user.role, "message":"User logged in successfully"}, status=200)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -73,30 +74,111 @@ def createJobPost(request) ->JsonResponse:
         experience = data.get("experience")
         description = data.get("description")
         location = data.get("location")
+        postedBy = request.user
 
         if not title or not experience or not description or not location:
             return JsonResponse({"error:": "Missing required fields"}, status=400)
 
-        jobPost = JobPost.objects.create(title=title, company=company, experience=experience, description=description, location=location)
+        jobPost = JobPost.objects.create(title=title, company=company, experience=experience, description=description, location=location, postedBy=postedBy)
 
 
         return JsonResponse({"id":jobPost.id,"message":"Job post created successfully"}, status=201)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
-def getJobPostById(request, jobPostId) ->JsonResponse:
+def applyForJob(request, jobPostId) ->JsonResponse:
+
     try:
         if not request.user.is_authenticated:
             return JsonResponse({"error:":"User is not authenticated"}, status=401)
 
         if request.user.role != User.Role.CANDIDATE:
             return JsonResponse({"error:":"User is not a candidate"}, status=403)
-
         jobPost = JobPost.objects.get(id=jobPostId)
+        
         if Application.objects.filter(jobPost=jobPost, user=request.user).exists():
             return JsonResponse({"error:":"You have already applied for this job"}, status=400)
 
-        Application.objects.create(jobPost=jobPost, user=request.user)
+        phone = request.POST.get("phone")
+        resume = request.FILES.get("resume")
+        if not resume:
+            return JsonResponse({"error:":"Resume is required"}, status=400)
+        if resume.size > 10 * 1024 * 1024:
+            return JsonResponse({"error:":"Resume is too large"}, status=400)
+        if not phone:
+            return JsonResponse({"error:":"Phone is required"}, status=400)
+        if not phone.isdigit():
+            return JsonResponse({"error:":"Phone is not a number"}, status=400)
+        if len(phone) != 10:
+            return JsonResponse({"error:":"Phone is not a valid number"}, status=400)
+
+        Application.objects.create(jobPost=jobPost, user=request.user, phone=phone, resume=resume)
         return JsonResponse({"message":"Application submitted successfully"}, status=201)
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+def getMyApplications(request) -> JsonResponse:
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error:", "User is not authenticated"}, status=401)
+        if request.user.role == User.Role.RECRUITER:
+            return JsonResponse({"error:", "User is not a candidate"}, status=403)
+        userApplications = Application.objects.filter(user=request.user).values()
+
+        # jobs = JobPost.objects.filter(id__in=jobIds).values()
+        # That is “job posts that have an application by this user.”
+        # userApplications = JobPost.objects.filter(application__user=request.user).distinct().values()
+
+        return JsonResponse({"user applications": list[Any](userApplications)}, status=200)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+def getJobPostByMe(request) -> JsonResponse:
+
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error:", "User is not authenticated"}, status=401)
+        if request.user.role != User.Role.RECRUITER:
+            return JsonResponse({"error:", "User is not a recruiter"}, status=403)
+        jobs = JobPost.objects.filter(postedBy=request.user).values()
+        return JsonResponse({"jobs": list[Any](jobs)}, status=200)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+def getApplicationsForJobPost(request, jobPostId) -> JsonResponse:
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error:", "User is not authenticated"}, status=401)
+        if request.user.role != User.Role.RECRUITER:
+            return JsonResponse({"error:", "User is not a recruiter"}, status=403)
+        applications = Application.objects.filter(jobPost=jobPostId).values()
+
+        return JsonResponse({"applications": list[Any](applications)}, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)})
+
+
+def updateApplicationStatus(request, applicationId) -> JsonResponse:
+    try:
+        if not request.user.is_authenticated:
+            return JsonResponse({"error:", "User is not authenticated"}, status=401)
+
+        if request.user.role != User.Role.RECRUITER:
+            return JsonResponse({"error:", "User is not a recruiter"}, status=403)
+
+        application = Application.objects.get(id=applicationId)
+
+        data = json.loads(request.body)
+        currentStatus = data.get("currentStatus")
+        if currentStatus != application.status:
+            application.status = currentStatus
+            return JsonResponse({"message": "Application status updated successfully"}, status=200)
+        else:
+            return JsonResponse({"message": "Application status is already updated"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)})
+        
+
+        
